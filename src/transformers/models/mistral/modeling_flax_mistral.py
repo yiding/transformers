@@ -152,7 +152,7 @@ class FlaxMistralRotaryEmbedding(nn.Module):
     dtype: jnp.dtype = jnp.float32
 
     def setup(self):
-        head_dim = self.config.hidden_size // self.config.num_attention_heads
+        head_dim = getattr(self.config, "head_dim", self.config.hidden_size // self.config.num_attention_heads)
         self.sincos = create_sinusoidal_positions(self.config.max_position_embeddings, head_dim)
 
     def __call__(self, key, query, position_ids):
@@ -224,17 +224,12 @@ class FlaxMistralAttention(nn.Module):
         config = self.config
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
-        self.head_dim = self.hidden_size // self.num_heads
+        self.head_dim = getattr(config, "head_dim", self.hidden_size // self.num_heads)
         self.num_key_value_heads = config.num_key_value_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.max_position_embeddings = config.max_position_embeddings
         self.attention_softmax_in_fp32 = self.dtype is not jnp.float32
         self.rope_theta = config.rope_theta
-        if (self.head_dim * self.num_heads) != self.hidden_size:
-            raise ValueError(
-                f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
-                f" and `num_heads`: {self.num_heads})."
-            )
         self.q_proj = nn.Dense(self.num_heads * self.head_dim, use_bias=False, dtype=self.dtype)
         self.k_proj = nn.Dense(self.num_key_value_heads * self.head_dim, use_bias=False, dtype=self.dtype)
         self.v_proj = nn.Dense(self.num_key_value_heads * self.head_dim, use_bias=False, dtype=self.dtype)
@@ -243,11 +238,11 @@ class FlaxMistralAttention(nn.Module):
         self.causal_mask = jnp.triu(casual_mask, k=-(config.sliding_window or 0))
         self.rotary_emb = FlaxMistralRotaryEmbedding(self.config, dtype=self.dtype)
 
-    def _split_heads(self, hidden_states, num_heads):
+    def _split_heads(self, hidden_states: jax.Array, num_heads: int) -> jax.Array:
         return hidden_states.reshape(hidden_states.shape[:2] + (num_heads, self.head_dim))
 
     def _merge_heads(self, hidden_states):
-        return hidden_states.reshape(hidden_states.shape[:2] + (self.hidden_size,))
+        return hidden_states.reshape(hidden_states.shape[:2] + (self.num_heads * self.head_dim,))
 
     @nn.compact
     # Copied from transformers.models.gpt_neo.modeling_flax_gpt_neo.FlaxGPTNeoSelfAttention._concatenate_to_cache
